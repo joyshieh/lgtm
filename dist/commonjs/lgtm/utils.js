@@ -117,6 +117,66 @@ function all(thenables) {
   return deferred.promise;
 }
 
+function hash(myhash) {
+  if (Object.keys(myhash).length === 0) {
+    return resolve({});
+  }
+
+  var results = {};
+  var keys = Object.keys(myhash);
+  var remaining = keys.length;
+  var deferred = config.defer();
+
+  function resolver(key) {
+    return function(value) {
+      results[key] = value;
+      if (--remaining === 0) {
+        deferred.resolve(results);
+      }
+    };
+  }
+
+  function ewResolver(key1, key2) {
+    return function(value) {
+      if (!results[key1]) {
+        results[key1] = {}
+      }
+      if (!results[key1][key2]) {
+        results[key1][key2] = []
+      }
+      results[key1][key2].push(value);
+      if (--remaining === 0) {
+        deferred.resolve(results);
+      }
+    };
+  }
+
+  keys.forEach(function(key) {
+    var thenablesOrHash = myhash[key];
+    if (thenablesOrHash.length === undefined && Object.keys(thenablesOrHash).length > 0) {
+      // hash
+      var moreKeys = Object.keys(thenablesOrHash);
+      remaining += moreKeys.length;
+      moreKeys.forEach(function(moreKey) {
+        var listOfThenables = thenablesOrHash[moreKey]; // list of thenables
+        listOfThenables.forEach(function(thenables) {
+          for (var i = 0; i < thenables.length; i++) {
+            var thenable = thenables[i];
+            resolve(thenable).then(ewResolver(key, moreKey), deferred.reject);
+          }
+        });
+      });
+    } else {
+      for (var i = 0; i < thenablesOrHash.length; i++) {
+        var thenable = thenablesOrHash[i];
+        resolve(thenable).then(resolver(key), deferred.reject);
+      }
+    }
+  });
+
+  return deferred.promise;
+}
+
 
 exports.forEach = forEach;
 exports.keys = keys;
@@ -126,3 +186,4 @@ exports.contains = contains;
 exports.uniq = uniq;
 exports.resolve = resolve;
 exports.all = all;
+exports.hash = hash;

@@ -1,5 +1,5 @@
 import config from './config';
-import { all, resolve, contains, keys, forEach, get, uniq } from './utils';
+import { all, resolve, contains, keys, forEach, get, uniq, hash } from './utils';
 
 function ObjectValidator() {
   this._validations  = {};
@@ -15,6 +15,18 @@ ObjectValidator.prototype = {
 
     if (!list) {
       list = this._validations[attr] = [];
+    }
+
+    list.push([fn, message]);
+  },
+
+  addEachValidation: function(attr, eachAttr, fn, message) {
+    if (!this._validations[attr]) { this._validations[attr] = {}; }
+
+    var list = this._validations[attr][eachAttr];
+
+    if (!list) {
+      list = this._validations[attr][eachAttr] = [];
     }
 
     list.push([fn, message]);
@@ -62,13 +74,13 @@ ObjectValidator.prototype = {
       attributes = keys(this._validations);
     }
 
-    var validationPromises = [];
+    var validationPromises = {};
     for (var i = 0; i < attributes.length; i++) {
       var attr = attributes[i];
-      validationPromises = validationPromises.concat(this._validateAttribute(object, attr));
+      validationPromises[attr] = this._validateAttribute(object, attr); // This can be an array or a hash
     }
 
-    var promise = all(validationPromises).then(
+    var promise = hash(validationPromises).then(
       function(results) {
         results = self._collectResults(results);
         if (callback) {
@@ -91,8 +103,16 @@ ObjectValidator.prototype = {
   _validateAttribute: function(object, attr) {
     var value       = get(object, attr);
     var validations = this._validations[attr];
-    var results     = [];
 
+    if (validations && validations.length === undefined && keys(validations).length > 0) {
+      var resultHash = {};
+      keys(validations).forEach(function(key) {
+        resultHash[key] = this._validateEachAttribute(object, attr, key);
+      }, this);
+      return resultHash;
+    }
+
+    var results     = [];
     if (validations) {
       validations.forEach(function(pair) {
         var fn      = pair[0];
@@ -112,11 +132,54 @@ ObjectValidator.prototype = {
       results.push([ attr, null ]);
     }
 
-    var dependents = this._getDependentsFor(attr);
-    for (var i = 0; i < dependents.length; i++) {
-      var dependent = dependents[i];
-      results = results.concat(this._validateAttribute(object, dependent));
-    }
+    // // what tod o with dependents
+    // var dependents = this._getDependentsFor(attr);
+    // for (var i = 0; i < dependents.length; i++) {
+    //   var dependent = dependents[i];
+    //   results = results.concat(this._validateAttribute(object, dependent));
+    // }
+
+    return results;
+  },
+
+  _validateEachAttribute: function(object, attr, eachAttr) {
+    var objects     = get(object, attr);
+    var validations = this._validations[attr][eachAttr];
+    var results     = [];
+
+    objects.forEach(function(obj) {
+      var value = obj.get(eachAttr);
+      var objectResults = [];
+      if (validations) {
+        validations.forEach(function(pair) {
+          var fn      = pair[0];
+          var message = pair[1];
+
+          var promise = resolve()
+            .then(function() {
+              return fn(value, eachAttr, obj);
+            })
+            .then(function(isValid) {
+              return [ eachAttr, isValid ? null : message ];
+            });
+
+          objectResults.push(promise);
+        });
+      } else if (contains(this.attributes(), eachAttr)) { // validations and dependencies
+        objectResults.push([ eachAttr, null ]);
+      }
+
+      // // what to do with dependents
+      // var dependents = this._getDependentsFor(attr);
+      // for (var i = 0; i < dependents.length; i++) {
+      //   var dependent = dependents[i];
+      //   results = results.concat(this._validateAttribute(object, dependent));
+      // }
+
+      // objectResults is the list of validations on a property.
+      // results is a list of objectResults, one for each object in the collection.
+      results.push(objectResults);
+    });
 
     return results;
   },
@@ -127,6 +190,45 @@ ObjectValidator.prototype = {
       errors : {}
     };
 
+    var keys = Object.keys(results);
+    keys.forEach(function(key) {
+      var keyResult = results[key];
+
+      if (keyResult.length === undefined && Object.keys(keyResult).length > 0) {
+        Object.keys(keyResult).forEach(function(attr) {
+          var messageList = results[key][attr];
+          var keyMessages = result.errors[key]
+          if (!keyMessages) {
+            keyMessages = result.errors[key] = {};
+          }
+          var messages = result.errors[key][attr];
+
+          if (!messages) {
+            messages = result.errors[key][attr] = [];
+          }
+
+          messageList.forEach(function(message) {
+            messages.push(message[1]);
+            if (message[1]) {
+              result.valid = false;
+            }
+          });
+        });
+      } else {
+        var attr = results[key][0];
+        var message = results[key][1];
+        var messages = result.errors[attr];
+
+        if (!messages) {
+          messages = result.errors[attr] = [];
+        }
+
+        if (message) {
+          messages.push(message);
+          result.valid = false;
+        }
+      }
+    });
     for (var i = 0; i < results.length; i++) {
       if (!results[i]){ continue; }
 

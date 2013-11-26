@@ -1,5 +1,4 @@
-(function(e){if("function"==typeof bootstrap)bootstrap("lgtm",e);else if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else if("undefined"!=typeof ses){if(!ses.ok())return;ses.makeLGTM=e}else"undefined"!=typeof window?window.LGTM=e():global.LGTM=e()})(function(){var define,ses,bootstrap,module,exports;
-return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+!function(e){"object"==typeof exports?module.exports=e():"function"==typeof define&&define.amd?define(e):"undefined"!=typeof window?window.LGTM=e():"undefined"!=typeof global?global.LGTM=e():"undefined"!=typeof self&&(self.LGTM=e())}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 "use strict";
 var __dependency1__ = require("./lgtm");
 var configure = __dependency1__.configure;
@@ -162,6 +161,7 @@ var keys = __dependency1__.keys;
 var forEach = __dependency1__.forEach;
 var get = __dependency1__.get;
 var uniq = __dependency1__.uniq;
+var hash = __dependency1__.hash;
 
 function ObjectValidator() {
   this._validations  = {};
@@ -177,6 +177,18 @@ ObjectValidator.prototype = {
 
     if (!list) {
       list = this._validations[attr] = [];
+    }
+
+    list.push([fn, message]);
+  },
+
+  addEachValidation: function(attr, eachAttr, fn, message) {
+    if (!this._validations[attr]) { this._validations[attr] = {}; }
+
+    var list = this._validations[attr][eachAttr];
+
+    if (!list) {
+      list = this._validations[attr][eachAttr] = [];
     }
 
     list.push([fn, message]);
@@ -224,13 +236,13 @@ ObjectValidator.prototype = {
       attributes = keys(this._validations);
     }
 
-    var validationPromises = [];
+    var validationPromises = {};
     for (var i = 0; i < attributes.length; i++) {
       var attr = attributes[i];
-      validationPromises = validationPromises.concat(this._validateAttribute(object, attr));
+      validationPromises[attr] = this._validateAttribute(object, attr); // This can be an array or a hash
     }
 
-    var promise = all(validationPromises).then(
+    var promise = hash(validationPromises).then(
       function(results) {
         results = self._collectResults(results);
         if (callback) {
@@ -253,8 +265,16 @@ ObjectValidator.prototype = {
   _validateAttribute: function(object, attr) {
     var value       = get(object, attr);
     var validations = this._validations[attr];
-    var results     = [];
 
+    if (validations && validations.length === undefined && keys(validations).length > 0) {
+      var resultHash = {};
+      keys(validations).forEach(function(key) {
+        resultHash[key] = this._validateEachAttribute(object, attr, key);
+      }, this);
+      return resultHash;
+    }
+
+    var results     = [];
     if (validations) {
       validations.forEach(function(pair) {
         var fn      = pair[0];
@@ -274,11 +294,54 @@ ObjectValidator.prototype = {
       results.push([ attr, null ]);
     }
 
-    var dependents = this._getDependentsFor(attr);
-    for (var i = 0; i < dependents.length; i++) {
-      var dependent = dependents[i];
-      results = results.concat(this._validateAttribute(object, dependent));
-    }
+    // // what tod o with dependents
+    // var dependents = this._getDependentsFor(attr);
+    // for (var i = 0; i < dependents.length; i++) {
+    //   var dependent = dependents[i];
+    //   results = results.concat(this._validateAttribute(object, dependent));
+    // }
+
+    return results;
+  },
+
+  _validateEachAttribute: function(object, attr, eachAttr) {
+    var objects     = get(object, attr);
+    var validations = this._validations[attr][eachAttr];
+    var results     = [];
+
+    objects.forEach(function(obj) {
+      var value = obj.get(eachAttr);
+      var objectResults = [];
+      if (validations) {
+        validations.forEach(function(pair) {
+          var fn      = pair[0];
+          var message = pair[1];
+
+          var promise = resolve()
+            .then(function() {
+              return fn(value, eachAttr, obj);
+            })
+            .then(function(isValid) {
+              return [ eachAttr, isValid ? null : message ];
+            });
+
+          objectResults.push(promise);
+        });
+      } else if (contains(this.attributes(), eachAttr)) { // validations and dependencies
+        objectResults.push([ eachAttr, null ]);
+      }
+
+      // // what to do with dependents
+      // var dependents = this._getDependentsFor(attr);
+      // for (var i = 0; i < dependents.length; i++) {
+      //   var dependent = dependents[i];
+      //   results = results.concat(this._validateAttribute(object, dependent));
+      // }
+
+      // objectResults is the list of validations on a property.
+      // results is a list of objectResults, one for each object in the collection.
+      results.push(objectResults);
+    });
 
     return results;
   },
@@ -289,6 +352,45 @@ ObjectValidator.prototype = {
       errors : {}
     };
 
+    var keys = Object.keys(results);
+    keys.forEach(function(key) {
+      var keyResult = results[key];
+
+      if (keyResult.length === undefined && Object.keys(keyResult).length > 0) {
+        Object.keys(keyResult).forEach(function(attr) {
+          var messageList = results[key][attr];
+          var keyMessages = result.errors[key]
+          if (!keyMessages) {
+            keyMessages = result.errors[key] = {};
+          }
+          var messages = result.errors[key][attr];
+
+          if (!messages) {
+            messages = result.errors[key][attr] = [];
+          }
+
+          messageList.forEach(function(message) {
+            messages.push(message[1]);
+            if (message[1]) {
+              result.valid = false;
+            }
+          });
+        });
+      } else {
+        var attr = results[key][0];
+        var message = results[key][1];
+        var messages = result.errors[attr];
+
+        if (!messages) {
+          messages = result.errors[attr] = [];
+        }
+
+        if (message) {
+          messages.push(message);
+          result.valid = false;
+        }
+      }
+    });
     for (var i = 0; i < results.length; i++) {
       if (!results[i]){ continue; }
 
@@ -437,6 +539,66 @@ function all(thenables) {
   return deferred.promise;
 }
 
+function hash(myhash) {
+  if (Object.keys(myhash).length === 0) {
+    return resolve({});
+  }
+
+  var results = {};
+  var keys = Object.keys(myhash);
+  var remaining = keys.length;
+  var deferred = config.defer();
+
+  function resolver(key) {
+    return function(value) {
+      results[key] = value;
+      if (--remaining === 0) {
+        deferred.resolve(results);
+      }
+    };
+  }
+
+  function ewResolver(key1, key2) {
+    return function(value) {
+      if (!results[key1]) {
+        results[key1] = {}
+      }
+      if (!results[key1][key2]) {
+        results[key1][key2] = []
+      }
+      results[key1][key2].push(value);
+      if (--remaining === 0) {
+        deferred.resolve(results);
+      }
+    };
+  }
+
+  keys.forEach(function(key) {
+    var thenablesOrHash = myhash[key];
+    if (thenablesOrHash.length === undefined && Object.keys(thenablesOrHash).length > 0) {
+      // hash
+      var moreKeys = Object.keys(thenablesOrHash);
+      remaining += moreKeys.length;
+      moreKeys.forEach(function(moreKey) {
+        var listOfThenables = thenablesOrHash[moreKey]; // list of thenables
+        listOfThenables.forEach(function(thenables) {
+          for (var i = 0; i < thenables.length; i++) {
+            var thenable = thenables[i];
+            resolve(thenable).then(ewResolver(key, moreKey), deferred.reject);
+          }
+        });
+      });
+    } else {
+      for (var i = 0; i < thenablesOrHash.length; i++) {
+        var thenable = thenablesOrHash[i];
+        resolve(thenable).then(resolver(key), deferred.reject);
+      }
+    }
+  });
+
+  return deferred.promise;
+}
+
 
 exports.forEach = forEach;
 exports.keys = keys;
@@ -446,6 +608,7 @@ exports.contains = contains;
 exports.uniq = uniq;
 exports.resolve = resolve;
 exports.all = all;
+exports.hash = hash;
 },{"./config":3}],7:[function(require,module,exports){
 "use strict";
 var ObjectValidator = require("./object_validator");
@@ -687,7 +850,7 @@ function all(promises) {
 
 exports.all = all;
 },{"./promise":17}],11:[function(require,module,exports){
-var process=require("__browserify_process"),global=self;"use strict";
+var process=require("__browserify_process"),global=typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {};"use strict";
 var browserGlobal = (typeof window !== 'undefined') ? window : {};
 var BrowserMutationObserver = browserGlobal.MutationObserver || browserGlobal.WebKitMutationObserver;
 var async;
@@ -1203,7 +1366,7 @@ function resolve(thenable) {
 
 exports.resolve = resolve;
 },{"./promise":17}],20:[function(require,module,exports){
-var global=self;"use strict";
+var global=typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {};"use strict";
 var local = (typeof global === "undefined") ? this : global;
 
 function rethrow(reason) {
@@ -1215,6 +1378,7 @@ function rethrow(reason) {
 
 
 exports.rethrow = rethrow;
-},{}]},{},[1])(1)
+},{}]},{},[1])
+(1)
 });
 ;

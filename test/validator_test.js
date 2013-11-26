@@ -324,3 +324,37 @@ test('is used by #optional to prevent subsequent validations from firing when a 
   });
   stop();
 });
+
+QUnit.module('validator#each', {
+  setup: function() {
+    this.validator =
+      validator()
+        .validates('children')
+          .each('name')
+            .required('Child must have a name')
+        .build();
+  }
+});
+
+test('performs validation on each element in a list', function() {
+  expect(1);
+  obj = {
+    children: [
+      {
+        name: ''
+      }, {
+        name: 'Joy'
+      }
+    ]
+  }
+  this.validator.validate(obj).then(function(result) {
+    start();
+    deepEqual(result, {
+      valid: false,
+      errors: {
+        children: ['Child must have a name', '']
+      }
+    });
+  });
+  stop();
+});
